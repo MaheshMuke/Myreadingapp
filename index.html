@@ -140,10 +140,11 @@
       <div class="status" id="ocrStatus" role="status" aria-live="polite"></div><div class="error hidden" id="ocrError" role="alert"></div>
       <p class="subtle">The first OCR run downloads the English recognition engine and needs internet access. OCR runs on this device; the PDF is not uploaded. Text extraction and page rendering use PDF.js.</p>
       <h2 style="margin-top:24px">Reading music</h2>
-      <div class="setting"><div>Ambient music<small>Generated on this device; optional and off by default</small></div><button class="control" id="musicToggle">Play</button></div>
+      <div class="setting"><div>Reading music<small>Generated on this device; optional and off by default</small></div><button class="control" id="musicToggle">Play</button></div>
+      <div class="setting"><label for="musicStyle">Sound style</label><select class="control" id="musicStyle"><option value="ambient">Ambient</option><option value="piano">Soft piano</option><option value="chimes">Gentle chimes</option></select></div>
       <div class="setting"><label for="musicVolume">Volume</label><input id="musicVolume" type="range" min="0" max="100" value="25"><span id="musicVolumeLabel">25%</span></div>
       <button class="control" id="musicStop">Stop music</button><div class="status" id="musicStatus" role="status" aria-live="polite">Music is off.</div>
-      <p class="subtle">Music is a quiet, locally synthesized instrumental soundscape, not a recording. Playback requires browser audio support and may be paused by device or browser restrictions.</p>
+      <p class="subtle">Choose ambient tones, soft piano, or gentle chimes. Music is generated on this device, not a recording. Playback requires browser audio support and may be paused by device or browser restrictions.</p>
     </div>
   </div>
   <div class="loader" id="loader" style="position:fixed;inset:0;z-index:10;display:none;place-items:center;background:#0007">
@@ -163,7 +164,7 @@
         localStorage.setItem('driftPrefs', JSON.stringify({
           theme: $('theme').value, fontSize: $('fontSize').value, fontFace: $('fontFace').value,
           speed: $('speed').value, focus: $('focusToggle').checked, rotate: $('autoRotate').checked,
-          musicVolume: $('musicVolume').value
+          musicVolume: $('musicVolume').value, musicStyle: $('musicStyle').value
         }));
         localStorage.setItem('driftBook', JSON.stringify({
           name: state.name, pages: state.pages.map(page => ({ lines: page.lines.map(line => ({ text: line.text, fontSize: line.fontSize, x: line.x, gap: line.gap, heading: line.heading, list: line.list })) })),
@@ -179,6 +180,7 @@
         $('focusToggle').checked = !!p.focus;
         $('autoRotate').checked = p.rotate !== false;
         $('musicVolume').value = p.musicVolume || '25';
+        $('musicStyle').value = ['ambient', 'piano', 'chimes'].includes(p.musicStyle) ? p.musicStyle : 'ambient';
         document.documentElement.dataset.theme = $('theme').value;
         applyTypography();
         updateSpeedLabel();
@@ -566,7 +568,24 @@
         if (!state.audio) state.audio = new AudioContext();
         return state.audio;
       }
-      function playChord(frequencies) {
+      const musicStyles = {
+        ambient: {
+          label: 'ambient music',
+          chords: [[261.63, 329.63, 392], [220, 261.63, 329.63], [174.61, 220, 261.63], [196, 246.94, 293.66]],
+          types: ['sine', 'triangle'], levels: [.65, .15], attack: 1.2, hold: 3.8, release: 5, duration: 5.05, interval: 4000
+        },
+        piano: {
+          label: 'soft piano',
+          chords: [[261.63, 329.63, 392], [293.66, 349.23, 440], [220, 261.63, 329.63], [196, 246.94, 293.66]],
+          types: ['triangle', 'sine', 'triangle'], levels: [.38, .11, .08], attack: .025, hold: .16, release: 2.4, duration: 2.45, interval: 3000
+        },
+        chimes: {
+          label: 'gentle chimes',
+          chords: [[523.25, 659.25, 783.99], [440, 523.25, 659.25], [349.23, 440, 523.25], [392, 493.88, 587.33]],
+          types: ['sine', 'sine', 'triangle'], levels: [.32, .12, .06], attack: .04, hold: .25, release: 3.6, duration: 3.65, interval: 4000
+        }
+      };
+      function playChord(frequencies, style) {
         const audio = ensureAudio();
         const master = audio.createGain();
         master.gain.value = Number($('musicVolume').value) / 100 * .055;
@@ -576,15 +595,15 @@
         for (const [index, frequency] of frequencies.entries()) {
           const oscillator = audio.createOscillator();
           const gain = audio.createGain();
-          oscillator.type = index === 0 ? 'sine' : 'triangle';
+          oscillator.type = style.types[index % style.types.length];
           oscillator.frequency.value = frequency;
           gain.gain.setValueAtTime(.0001, now);
-          gain.gain.linearRampToValueAtTime(index === 0 ? .65 : .15, now + 1.2);
-          gain.gain.setValueAtTime(index === 0 ? .65 : .15, now + 3.8);
-          gain.gain.linearRampToValueAtTime(.0001, now + 5);
+          gain.gain.linearRampToValueAtTime(style.levels[index % style.levels.length], now + style.attack);
+          gain.gain.setValueAtTime(style.levels[index % style.levels.length], now + style.hold);
+          gain.gain.linearRampToValueAtTime(.0001, now + style.release);
           oscillator.connect(gain).connect(master);
           oscillator.start(now);
-          oscillator.stop(now + 5.05);
+          oscillator.stop(now + style.duration);
           state.musicNodes.push(oscillator);
           oscillator.onended = () => {
             oscillator.disconnect();
@@ -595,22 +614,22 @@
         setTimeout(() => {
           master.disconnect();
           state.musicGains = state.musicGains.filter(gain => gain !== master);
-        }, 5500);
+        }, (style.duration + .5) * 1000);
       }
       async function startMusic() {
         try {
           const audio = ensureAudio();
           await audio.resume();
           if (audio.state !== 'running') throw new Error('Browser audio playback is blocked. Tap Play again or check device sound settings.');
+          const style = musicStyles[$('musicStyle').value];
           state.musicPlaying = true;
           $('musicToggle').textContent = 'Pause';
-          $('musicStatus').textContent = 'Playing locally generated ambient music.';
-          const chords = [[261.63, 329.63, 392], [220, 261.63, 329.63], [174.61, 220, 261.63], [196, 246.94, 293.66]];
+          $('musicStatus').textContent = `Playing locally generated ${style.label}.`;
           let index = 0;
-          playChord(chords[index]);
+          playChord(style.chords[index], style);
           state.musicTimer = setInterval(() => {
-            if (state.musicPlaying) playChord(chords[++index % chords.length]);
-          }, 4000);
+            if (state.musicPlaying) playChord(style.chords[++index % style.chords.length], style);
+          }, style.interval);
         } catch (error) {
           $('musicStatus').textContent = error.message || 'Audio is unavailable in this browser.';
         }
@@ -636,6 +655,12 @@
           state.musicGains.forEach(gain => gain.gain.setTargetAtTime(value, state.audio.currentTime, .12));
         }
         save();
+      };
+      $('musicStyle').onchange = () => {
+        const wasPlaying = state.musicPlaying;
+        if (wasPlaying) stopMusic(true);
+        save();
+        if (wasPlaying) startMusic();
       };
       applyPreferences();
       const previous = JSON.parse(localStorage.getItem('driftBook') || 'null');

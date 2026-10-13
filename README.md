@@ -18,7 +18,7 @@ You can also preview it on a computer by opening `index.html`, though PDF.js and
 - Select a word in the reading text to look up its English definition. Dictionary lookup needs an internet connection.
 - Choose **Focus** to hide the whole app interface. Tap the reading area to reveal a temporary **Exit focus** control. Reading position, theme, font, scroll speed, and audio volume are saved automatically in local browser storage. Clearing browser data removes the saved book and preferences.
 - Scrolling speed is adjustable from 5 to 120 pixels per second and can be changed while auto-scroll is active.
-- Optional **Settings → Reading music** generates a quiet ambient instrumental soundscape with the Web Audio API; no music files or copyrighted recordings are bundled or downloaded. Playback is off by default and depends on browser audio support and device playback settings.
+- Optional **Settings → Reading music** generates ambient tones, soft piano, or gentle chimes with the Web Audio API; no music files or copyrighted recordings are bundled or downloaded. Playback is off by default and depends on browser audio support and device playback settings.
 - Auto-scroll pauses at the end of the book. The Rotate button requests landscape orientation where Android/browser support permits it; the device may require the app to be installed and in full-screen mode.
 
 PDF.js and the OCR engine load from public CDNs. Music is generated locally; no audio files need to be supplied. This app does not upload books to a server.
