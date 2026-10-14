@@ -232,8 +232,14 @@
       function pageRecord(page) {
         return {
           lines: page.lines.map(line => ({ text: line.text, fontSize: line.fontSize, x: line.x, gap: line.gap, heading: line.heading, list: line.list })),
-          needsOcr: !!page.needsOcr, ocrText: page.ocrText || '', ocrWords: page.ocrWords || null
+          needsOcr: !!page.needsOcr, ocrText: page.ocrText || '', ocrWords: page.ocrWords || null,
+          renderedImage: page.renderedImage || null, renderedWidth: page.renderedWidth || 0, renderedHeight: page.renderedHeight || 0,
+          textSpans: page.textSpans || null
         };
+      }
+      function hasPageRenderCache(page) {
+        return page.renderedImage && page.renderedWidth > 0 && page.renderedHeight > 0 &&
+          (Array.isArray(page.textSpans) || Array.isArray(page.ocrWords));
       }
       function reportLibraryError(error, prefix = 'Could not save this book') {
         console.error(`${prefix}:`, error);
@@ -441,6 +447,71 @@
           page.layer.append(span);
         }
       }
+      function cacheTextSpans(page, viewport) {
+        page.textSpans = Array.from(page.layer.children, span => ({
+          text: span.textContent, left: parseFloat(span.style.left) / viewport.width,
+          top: parseFloat(span.style.top) / viewport.height, width: parseFloat(span.style.width) / viewport.width,
+          height: parseFloat(span.style.height) / viewport.height, fontSize: parseFloat(span.style.fontSize),
+          fontFamily: span.style.fontFamily
+        }));
+        page.renderedWidth = viewport.width;
+        page.renderedHeight = viewport.height;
+      }
+      function addCachedTextSpans(page, viewport) {
+        page.layer.replaceChildren();
+        const scale = viewport.height / page.renderedHeight;
+        for (const cached of page.textSpans || []) {
+          const span = document.createElement('span');
+          span.textContent = cached.text;
+          span.style.left = `${cached.left * 100}%`;
+          span.style.top = `${cached.top * 100}%`;
+          span.style.width = `${cached.width * 100}%`;
+          span.style.height = `${cached.height * 100}%`;
+          span.style.fontSize = `${cached.fontSize * scale}px`;
+          span.style.fontFamily = cached.fontFamily;
+          page.layer.append(span);
+        }
+      }
+      function canvasBlob(canvas) {
+        return new Promise((resolve, reject) => canvas.toBlob(blob => {
+          if (blob) resolve(blob);
+          else reject(new Error('Could not cache the rendered PDF page on this device.'));
+        }, 'image/webp', .9));
+      }
+      async function cacheRenderedImage(page) {
+        page.renderedImage = await canvasBlob(page.canvas);
+      }
+      async function decodeImage(blob) {
+        if (window.createImageBitmap) return createImageBitmap(blob);
+        const url = URL.createObjectURL(blob);
+        try {
+          return await new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error('Could not load the cached PDF page image.'));
+            image.src = url;
+          });
+        } finally { URL.revokeObjectURL(url); }
+      }
+      async function renderStoredPage(page, index) {
+        const image = await decodeImage(page.renderedImage);
+        const availableWidth = Math.min(720, Math.max(1, $('reader').clientWidth - 40));
+        const scale = availableWidth / page.renderedWidth;
+        const width = page.renderedWidth * scale;
+        const height = page.renderedHeight * scale;
+        const ratio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        page.canvas.width = Math.ceil(width * ratio);
+        page.canvas.height = Math.ceil(height * ratio);
+        page.canvas.style.width = `${width}px`;
+        page.canvas.style.height = `${height}px`;
+        page.layer.style.width = `${width}px`;
+        page.layer.style.height = `${height}px`;
+        page.viewport = { width, height };
+        page.canvas.getContext('2d', { alpha: false }).drawImage(image, 0, 0, page.canvas.width, page.canvas.height);
+        if (image.close) image.close();
+        if (page.ocrWords) addOcrSpans(page, page.ocrWords);
+        else addCachedTextSpans(page, page.viewport);
+      }
       async function renderPdfPage(page, index) {
         const pdfPage = await state.pdf.getPage(index + 1);
         const originalViewport = pdfPage.getViewport({ scale: 1 });
@@ -459,11 +530,16 @@
         await pdfPage.render({ canvasContext: context, viewport }).promise;
         page.viewport = viewport;
         page.pdfPage = pdfPage;
+        page.renderedWidth = viewport.width;
+        page.renderedHeight = viewport.height;
         const content = await pdfPage.getTextContent();
         page.pdfTextContent = content;
         if (!page.ocrText) page.lines = extractLines(content);
         if (page.ocrWords) addOcrSpans(page, page.ocrWords);
-        else addTextSpans(page, viewport, content);
+        else {
+          addTextSpans(page, viewport, content);
+          cacheTextSpans(page, viewport);
+        }
       }
       function addOcrSpans(page, words) {
         page.layer.replaceChildren();
@@ -500,7 +576,7 @@
         $('bookmeta').textContent = `${state.pages.length} pages · ${state.bookId ? 'Stored on this device' : state.legacy ? 'Saved reading text' : 'Not saved in the library'}`;
         $('app').classList.toggle('focus-mode', $('focusToggle').checked);
         $('readerContent').replaceChildren();
-        if (state.pdf) state.pages.forEach(createPdfPage);
+        if (state.pdf || state.pages.some(page => page.renderedImage)) state.pages.forEach(createPdfPage);
         else state.pages.forEach((page, index) => $('readerContent').append(makeFallbackPage(page, index)));
         applyTypography();
         updateProgress();
@@ -623,26 +699,51 @@
           const [fileRecord, pagesRecord] = await Promise.all([getBookFile(id), getBookPages(id)]);
           if (!fileRecord?.blob) throw new Error('The saved PDF is missing from device storage.');
           const backup = JSON.parse(localStorage.getItem('driftPosition') || 'null');
-          if (!window.pdfjsLib) throw new Error('PDF rendering could not load. Check your connection and try again.');
           state.running = false;
           cancelAnimationFrame(state.raf);
           state.bookId = book.id;
           state.legacy = false;
           state.name = book.name;
           state.importedAt = book.importedAt;
-          const data = await fileRecord.blob.arrayBuffer();
-          state.pdf = await pdfjsLib.getDocument({ data }).promise;
-          state.pages = Array.from({ length: state.pdf.numPages }, (_, index) => {
+          state.pages = Array.from({ length: book.pageCount }, (_, index) => {
             const saved = pagesRecord?.pages?.[index];
             return saved
               ? { ...parseSavedPage(saved), needsOcr: !!saved.needsOcr, ocrText: saved.ocrText || '', ocrWords: saved.ocrWords || null }
               : { lines: [], needsOcr: false };
           });
+          const cacheComplete = state.pages.length === book.pageCount && state.pages.every(hasPageRenderCache);
+          let cacheNeedsUpdate = !cacheComplete;
+          state.pdf = null;
+          if (!cacheComplete) {
+            if (!window.pdfjsLib) throw new Error('PDF rendering could not load. Check your connection and try again.');
+            const data = await fileRecord.blob.arrayBuffer();
+            state.pdf = await pdfjsLib.getDocument({ data }).promise;
+          }
           showBook();
           for (let index = 0; index < state.pages.length; index++) {
-            $('loadstatus').textContent = `Rendering page ${index + 1} of ${state.pages.length}…`;
-            await renderPdfPage(state.pages[index], index);
+            const page = state.pages[index];
+            if (hasPageRenderCache(page)) {
+              $('loadstatus').textContent = `Loading saved page ${index + 1} of ${state.pages.length}…`;
+              try { await renderStoredPage(page, index); }
+              catch (error) {
+                if (!state.pdf) {
+                  if (!window.pdfjsLib) throw error;
+                  const data = await fileRecord.blob.arrayBuffer();
+                  state.pdf = await pdfjsLib.getDocument({ data }).promise;
+                }
+                console.warn(`Cached page ${index + 1} could not be loaded; rendering it again:`, error);
+                await renderPdfPage(page, index);
+                await cacheRenderedImage(page);
+                cacheNeedsUpdate = true;
+              }
+            } else {
+              $('loadstatus').textContent = `Rendering page ${index + 1} of ${state.pages.length}…`;
+              await renderPdfPage(page, index);
+              await cacheRenderedImage(page);
+              cacheNeedsUpdate = true;
+            }
           }
+          if (cacheNeedsUpdate) await putBookPages(book.id, state.pages.map(pageRecord));
           const savedPosition = continueReading
             ? (backup?.bookId === id ? backup.position : book.position)
             : null;
@@ -662,9 +763,14 @@
         } finally { $('loader').style.display = 'none'; }
       }
       function parseSavedPage(page) {
-        if (Array.isArray(page.lines)) return { lines: page.lines.map(line => typeof line === 'string' ? { text: line } : { ...line }) };
-        const lines = String(page.text || '').split(/\r?\n/).map(text => ({ text }));
-        return { lines };
+        const lines = Array.isArray(page.lines)
+          ? page.lines.map(line => typeof line === 'string' ? { text: line } : { ...line })
+          : String(page.text || '').split(/\r?\n/).map(text => ({ text }));
+        return {
+          ...page, lines,
+          renderedImage: page.renderedImage || null, renderedWidth: page.renderedWidth || 0,
+          renderedHeight: page.renderedHeight || 0, textSpans: page.textSpans || null
+        };
       }
       async function openFile(file) {
         if (!file) return;
@@ -686,6 +792,7 @@
           for (let index = 0; index < state.pages.length; index++) {
             $('loadstatus').textContent = `Reading and rendering page ${index + 1} of ${state.pages.length}…`;
             await renderPdfPage(state.pages[index], index);
+            await cacheRenderedImage(state.pages[index]);
             const chars = pageText(state.pages[index]).replace(/[^\p{L}\p{N}]/gu, '').length;
             state.pages[index].needsOcr = chars < 20;
           }
@@ -716,7 +823,7 @@
         const pages = state.pages.filter(page => page.needsOcr && !page.ocrText);
         $('ocrHint').textContent = pages.length ? `${pages.length} page${pages.length === 1 ? ' has' : 's have'} little or no text` : 'No pages with little or no text were detected; you can still retry OCR';
         $('ocrBtn').textContent = $('ocrError').classList.contains('hidden') ? 'Run OCR' : 'Retry OCR';
-        $('ocrBtn').disabled = !state.pdf;
+        $('ocrBtn').disabled = !state.pages.some(page => page.canvas);
       }
       function displayOcrError(error) {
         const detail = error?.message || String(error || 'Unknown OCR error');
@@ -729,7 +836,7 @@
         updateOcrHint();
       }
       async function runOcr() {
-        if (!state.pdf) { $('ocrStatus').textContent = 'Open a PDF before running OCR.'; return; }
+        if (!state.pages.some(page => page.canvas)) { $('ocrStatus').textContent = 'Open a PDF before running OCR.'; return; }
         let targets = state.pages.map((page, index) => ({ page, index })).filter(({ page }) => page.needsOcr && !page.ocrText);
         if (!targets.length) {
           targets = state.pages.map((page, index) => ({ page, index })).filter(({ page }) => !page.ocrText);
@@ -1010,8 +1117,11 @@
       document.addEventListener('visibilitychange', () => { if (document.hidden) pauseReading(true); });
       document.addEventListener('freeze', () => pauseReading(true));
       window.addEventListener('resize', () => {
-        if (!state.pdf || !$('reader').clientWidth) return;
-        state.pages.forEach((page, index) => renderPdfPage(page, index).catch(error => console.error('Page resize render failed:', error)));
+        if (!state.pages.some(page => page.canvas) || !$('reader').clientWidth) return;
+        state.pages.forEach((page, index) => {
+          const render = page.renderedImage ? renderStoredPage(page, index) : renderPdfPage(page, index);
+          render.catch(error => console.error('Page resize render failed:', error));
+        });
       });
     })();
   </script>

@@ -13,8 +13,8 @@ You can also preview it on a computer by opening `index.html`, though PDF.js and
 
 ## Features and notes
 
-- PDFs, extracted page text, and reading positions are stored locally in the browser's IndexedDB library. No book is uploaded. Library storage uses device/browser quota; if storage is unavailable or full, Drift reports that the import could not be saved. Removing a book also removes its saved progress. Clearing browser data removes the local library.
-- PDF pages are rendered as pages to preserve their original layout. Selectable text overlays retain word lookup, and reopening a library book loads its saved PDF without asking you to select the source file again.
+- PDFs, rendered page images, extracted page text, and reading positions are stored locally in the browser's IndexedDB library. No book is uploaded. Library storage uses device/browser quota; if storage is unavailable or full, Drift reports that the import could not be saved. Removing a book also removes its saved progress. Clearing browser data removes the local library.
+- PDF pages are rendered as pages to preserve their original layout. Selectable text overlays retain word lookup, and reopening a library book reuses its saved page images and processed text without repeating PDF rendering or text extraction or asking you to select the source file again.
 - Pages with little or no extractable text are identified for OCR. Choose **Settings → Run OCR** to recognize them. The first run downloads the English Tesseract.js engine from jsDelivr and therefore needs internet access; progress is reported page by page. Download or initialization errors include details and can be retried. Recognized text remains selectable and is saved locally.
 - Select a word in the reading text to look up its English definition. Dictionary lookup needs an internet connection.
 - Choose **Focus** to hide the whole app interface. Tap the reading area to reveal a temporary **Exit focus** control. Auto-scroll pauses when the app is backgrounded or loses focus, saves the current page and offset, and stays paused until you press **Resume**. Reading preferences are saved in local browser storage.

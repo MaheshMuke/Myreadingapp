@@ -1,6 +1,6 @@
 # Build Drift for Android
 
-This Android Studio project wraps the reader in a small native Android app. Imported PDFs, library details, and exact saved reading positions stay in the app's local WebView storage; no book is uploaded. Use **My Books** to continue reading, open a saved PDF from the beginning, or remove it (which also deletes its progress). The reader page is maintained at `../index.html` and copied into `app/src/main/assets/index.html`.
+This Android Studio project wraps the reader in a small native Android app. Imported PDFs, cached rendered pages, extracted/OCR reading data, library details, and exact saved reading positions stay in the app's local WebView storage; no book is uploaded. Reopening a saved book reuses its cached pages and text instead of rendering or extracting them again. Use **My Books** to continue reading, open a saved PDF from the beginning, or remove it (which also deletes its saved data and progress). The reader page is maintained at `../index.html` and copied into `app/src/main/assets/index.html`.
 
 ## Build the APK
 
