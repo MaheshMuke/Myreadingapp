@@ -1,4 +1,4 @@
-const CACHE = 'drift-v2';
+const CACHE = 'drift-v3';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => {
